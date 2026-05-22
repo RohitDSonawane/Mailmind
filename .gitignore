@@ -1,0 +1,43 @@
+# Secrets — never commit these
+.env
+credentials.json
+token.json
+
+# Database
+mailmind.db
+*.db
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Pytest cache
+.pytest_cache/
+.cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+Docs
+Implementation_Plan
+
+# OS
+.DS_Store
+Thumbs.db
