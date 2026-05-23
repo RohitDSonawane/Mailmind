@@ -66,6 +66,11 @@ I was unable to find a single time slot that works for everyone based on the ava
 Let's try again. Please reply with new availability for the coming days.
 """
 
+SLOT_REJECTION_CORE = """
+The proposed time slot does not work for everyone.
+I have cleared the previous availability. Please reply with new dates and times you are free to meet.
+"""
+
 SLOT_PROPOSAL_CORE_TEMPLATE = """
 I propose the following time for the meeting:
 Date: {date}
