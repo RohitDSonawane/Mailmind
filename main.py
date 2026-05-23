@@ -71,6 +71,17 @@ def main() -> None:
     while True:
         try:
             try:
+                # Issue NOOP to synchronize mailbox state with the server
+                # Keep SMTP connection alive or reconnect
+                if hasattr(smtp_conn, "noop"):
+                    try:
+                        smtp_conn.noop()
+                    except Exception:
+                        logger.info("SMTP connection lost. Reconnecting...")
+                        smtp_conn = gmail_sender.connect(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
+
+                if hasattr(imap_conn, "noop"):
+                    imap_conn.noop()
                 messages = gmail_reader.fetch_unseen(imap_conn)
                 for message in messages:
                     if dal.is_processed(conn, message.message_id):
@@ -80,6 +91,7 @@ def main() -> None:
                         current_utc = datetime.now(timezone.utc).isoformat()
                         run_pipeline(conn, imap_conn, smtp_conn, message, current_utc)
                         dal.mark_processed(conn, message.message_id, current_utc)
+                        conn.commit()
                         gmail_reader.mark_seen(imap_conn, message.uid)
                     except Exception as e:
                         log_error(e, message.message_id)

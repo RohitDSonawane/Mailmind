@@ -5,6 +5,7 @@ token.json
 
 # Database
 mailmind.db
+mailmind.db-journal
 *.db
 
 # Python bytecode

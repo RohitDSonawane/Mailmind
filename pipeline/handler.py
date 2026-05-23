@@ -15,6 +15,7 @@ from tools.gmail_sender import send_email
 from database import dal
 from pipeline import preprocessor, consensus
 from agent import classifier, extractor, prompts
+from agent.framing import compose_email_body
 import config
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,6 @@ def run_pipeline(
     if dal.is_processed(conn, msg_id):
         logger.info(f"Message {msg_id} already processed. Skipping.")
         return
-
-    dal.mark_processed(conn, msg_id, current_utc)
-    conn.commit()
 
     clean_body = preprocessor.preprocess_email_body(inbound_email.body_text)
 
@@ -61,6 +59,47 @@ def run_pipeline(
         logger.info("Message classified as NOISE. Discarding.")
         return
     elif intent_str == "new_scheduling_request":
+        # If this email belongs to an existing thread, it's a roster expansion, not a new request.
+        # Extract any new participants from To/CC and add them to the thread.
+        if thread and thread_id:
+            logger.info(f"new_scheduling_request in existing thread {thread_id}. Checking for roster expansion.")
+            existing_participants = {p["email_address"] for p in dal.get_participants(conn, thread_id)}
+            new_members = (
+                set(inbound_email.to_addresses + inbound_email.cc_addresses)
+                - existing_participants
+                - {config.GMAIL_ADDRESS}
+            )
+            if new_members:
+                subject = thread["subject"]
+                for new_email in new_members:
+                    logger.info(f"Roster expansion: adding {new_email} to thread {thread_id}.")
+                    dal.insert_participant(conn, thread_id, new_email, False)
+                    conn.commit()
+                    try:
+                        framing_prompt = prompts.AVAILABILITY_REQUEST_FRAMING_PROMPT.format(
+                            subject=subject,
+                            initiator_name=inbound_email.from_address,
+                            participant_name=new_email
+                        )
+                        body = compose_email_body(
+                            email_type="availability_request",
+                            framing_prompt=framing_prompt,
+                            core_template=prompts.AVAILABILITY_REQUEST_CORE,
+                            template_vars={}
+                        )
+                        send_email(
+                            conn=smtp_conn,
+                            to_addresses=[new_email],
+                            subject=subject,
+                            body=body,
+                            in_reply_to=thread_id,
+                            references=thread_id
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send AVAILABILITY_REQUEST to {new_email}: {e}")
+            else:
+                logger.info(f"No new participants found in roster expansion email. Discarding.")
+            return
         _handle_new_request(conn, smtp_conn, inbound_email, current_utc)
     elif intent_str == "availability_reply":
         _handle_availability(conn, smtp_conn, inbound_email, clean_body, thread, thread_id, current_utc)
@@ -77,11 +116,11 @@ def run_pipeline(
 def _find_thread_id(email: InboundEmail) -> str:
     """Find the thread ID from headers."""
     # In this system, the thread ID is the Message-ID of the original thread-starting email.
-    if email.in_reply_to:
-        return email.in_reply_to
     if email.references:
         # First reference is usually the root of the thread
-        return email.references.split()[0]
+        return email.references.split()[0].strip("<> ")
+    if email.in_reply_to:
+        return email.in_reply_to.strip("<> ")
     return ""
 
 
@@ -142,24 +181,55 @@ def _handle_availability(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, emai
         return
 
     sender = email.from_address
-    participants = dal.get_participants(conn, thread_id)
-    participant_emails = {p["email_address"] for p in participants}
 
-    # Roster expansion
-    if sender not in participant_emails:
-        if sender in email.cc_addresses:
-            logger.info(f"Adding new CC participant {sender} to thread {thread_id}.")
-            dal.insert_participant(conn, thread_id, sender, False)
+    # Roster expansion: check if there are any new participants in To/CC
+    existing_participants = {p["email_address"] for p in dal.get_participants(conn, thread_id)}
+    new_members = (
+        set(email.to_addresses + email.cc_addresses + [sender])
+        - existing_participants
+        - {config.GMAIL_ADDRESS}
+    )
+    if new_members:
+        subject = thread["subject"]
+        for new_email in new_members:
+            logger.info(f"Roster expansion: adding new participant {new_email} to thread {thread_id}.")
+            dal.insert_participant(conn, thread_id, new_email, False)
             conn.commit()
-            participant_emails.add(sender)
-            # Send them an availability request so they know what to do if their reply didn't contain times
-        else:
-            logger.warning(f"Sender {sender} not in roster and not CC'd. Discarding availability reply.")
-            return
+            try:
+                framing_prompt = prompts.AVAILABILITY_REQUEST_FRAMING_PROMPT.format(
+                    subject=subject,
+                    initiator_name=thread["initiator_address"],
+                    participant_name=new_email
+                )
+                body = compose_email_body(
+                    email_type="availability_request",
+                    framing_prompt=framing_prompt,
+                    core_template=prompts.AVAILABILITY_REQUEST_CORE,
+                    template_vars={}
+                )
+                send_email(
+                    conn=smtp_conn,
+                    to_addresses=[new_email],
+                    subject=subject,
+                    body=body,
+                    in_reply_to=thread_id,
+                    references=thread_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to send AVAILABILITY_REQUEST to {new_email}: {e}")
 
-    # Extract availability
+    # After roster expansion, refresh the participant
+    participant = dal.get_participant(conn, thread_id, sender)
+    if not participant:
+        logger.warning(f"Sender {sender} not found in DB even after expansion check. Discarding.")
+        return
+    
+    participant_timezone = participant.get("timezone") if participant else None
+    
+    fallback_tz = participant_timezone or email.sender_timezone_offset
+    
     try:
-        extraction_result = extractor.extract_availability(clean_body, current_utc, "UTC")
+        extraction_result = extractor.extract_availability(clean_body, current_utc, fallback_tz)
     except ValidationError as e:
         logger.error(f"Extraction failed for {sender}: {e}")
         return
@@ -175,7 +245,6 @@ def _handle_availability(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, emai
     else:
         # Empty windows, ask for clarification
         try:
-            from agent.framing import compose_email_body
             framing_prompt = prompts.CLARIFICATION_REQUEST_FRAMING_PROMPT.format(
                 subject=thread["subject"],
                 participant_name=sender

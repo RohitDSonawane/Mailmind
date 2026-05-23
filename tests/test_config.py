@@ -21,6 +21,9 @@ def _reload_config(monkeypatch, env_overrides: dict) -> object:
     then re-import config so the module-level code re-runs.
     Returns the freshly imported config module.
     """
+    # Prevent load_dotenv from loading the real .env file
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
+
     # Ensure a clean import each time
     monkeypatch.delitem(sys.modules, "config", raising=False)
 

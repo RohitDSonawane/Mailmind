@@ -17,7 +17,7 @@ import config
 # ---------------------------------------------------------------------------
 
 classifier_agent = Agent(
-    model=GroqModel("llama-3.3-70b-versatile"),
+    model=GroqModel("llama-3.1-8b-instant"),
     output_type=ClassificationResult,
     system_prompt=CLASSIFIER_SYSTEM_PROMPT,
     retries=2,

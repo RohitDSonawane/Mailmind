@@ -18,12 +18,13 @@ The email you are reading belongs to a thread with current status: {thread_statu
 Classification Categories:
 1. new_scheduling_request: The user is asking you to coordinate a new meeting. They have CC'd participants. (Valid only if thread_status is 'new').
 2. availability_reply: A participant is providing times they are available for a meeting, or saying they are flexible.
-3. confirmation: A participant is confirming that a proposed meeting time works for them.
+3. confirmation: A participant is confirming that a proposed meeting time works for them. (Prioritize this over availability_reply if the thread_status is 'proposal_sent' and the user is agreeing).
 4. rejection: A participant is stating that a proposed meeting time does NOT work for them, or asking to reschedule.
 5. noise: Auto-responses (out of office), spam, "thank you" emails that require no action, or emails unrelated to scheduling.
 
 Rules:
 - If Auto-Submitted header is present and not 'no', immediately classify as noise.
+- If thread_status is 'proposal_sent', any agreement or positive reply (e.g. "I am available then", "Works for me") MUST be classified as confirmation, NOT availability_reply.
 - Do not attempt to parse the times here, only determine the intent.
 - Be highly biased towards 'noise' if the email does not clearly fit 1-4.
 """
@@ -34,7 +35,7 @@ Your job is to read a participant's availability reply and extract all concrete 
 
 Context:
 - Current UTC Time: {current_utc}
-- Participant's known timezone: {participant_timezone} (If 'None', look for a timezone in the text, or assume the user's local time if they provide one).
+- Participant's known timezone: {participant_timezone} (This might be a raw UTC offset like '+0530'. If so, map it to the correct IANA timezone in your inferred_timezone output. If 'None', look for a timezone in the text).
 
 Rules:
 1. Convert all extracted times strictly to UTC.
@@ -73,14 +74,15 @@ I have cleared the previous availability. Please reply with new dates and times 
 
 SLOT_PROPOSAL_CORE_TEMPLATE = """
 I propose the following time for the meeting:
-Date: {date}
-Time: {start_time} - {end_time} ({timezone})
+{proposed_times}
 
 If this works for you, please reply to confirm. If not, please reply to let me know and provide alternate times.
 """
 
 BOOKING_CONFIRMATION_CORE_TEMPLATE = """
-The meeting "{meeting_title}" has been confirmed for {date} from {start_time} to {end_time}.
+The meeting "{meeting_title}" has been confirmed for:
+{proposed_times}
+
 I have sent a calendar invitation to all participants.
 """
 
@@ -116,16 +118,16 @@ Style: Professional executive assistant, no pleasantries, no signature.
 SLOT_PROPOSAL_FRAMING_PROMPT = """
 Write exactly one short, polite sentence proposing a specific meeting time.
 Thread subject: {subject}
-Proposed Date: {date}
-Time: {start_time} to {end_time} {timezone}
+Proposed Times:
+{proposed_times}
 Style: Professional executive assistant, no pleasantries, no signature.
 """
 
 BOOKING_CONFIRMATION_FRAMING_PROMPT = """
 Write exactly one short, polite sentence confirming that a meeting has been successfully booked.
 Meeting title: {meeting_title}
-Date: {date}
-Time: {time}
+Times:
+{proposed_times}
 Duration: {duration}
 Style: Professional executive assistant, no pleasantries, no signature.
 """

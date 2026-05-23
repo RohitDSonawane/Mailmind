@@ -19,6 +19,37 @@ import config
 
 logger = logging.getLogger(__name__)
 
+def _format_proposed_times(slot, participants) -> str:
+    import zoneinfo
+    from datetime import timezone, datetime
+    unique_tzs = set()
+    for p in participants:
+        tz_str = p.get("timezone") or config.DEFAULT_TIMEZONE
+        unique_tzs.add(tz_str)
+        
+    formatted_times = []
+    for tz_str in sorted(list(unique_tzs)):
+        try:
+            if tz_str == "UTC":
+                tz = timezone.utc
+            elif tz_str.startswith("+") or tz_str.startswith("-"):
+                tz = datetime.strptime(tz_str, "%z").tzinfo
+            else:
+                tz = zoneinfo.ZoneInfo(tz_str)
+        except Exception:
+            tz = timezone.utc
+            tz_str = "UTC"
+
+        local_start = slot.utc_start.astimezone(tz)
+        local_end = slot.utc_end.astimezone(tz)
+        date_str = local_start.strftime("%Y-%m-%d")
+        start_str = local_start.strftime("%H:%M")
+        end_str = local_end.strftime("%H:%M")
+        
+        formatted_times.append(f"- {date_str} {start_str} - {end_str} ({tz_str})")
+        
+    return "\n".join(formatted_times)
+
 
 def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id: str, current_utc: str) -> None:
     """
@@ -79,33 +110,13 @@ def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id
                 slot_json = thread["proposed_slot"]
                 from agent.definitions import MeetingSlot
                 slot = MeetingSlot.model_validate_json(slot_json)
-                import zoneinfo
-                from datetime import timezone
-                
                 participants = dal.get_participants(conn, thread_id)
-                initiator = next((p for p in participants if p["is_initiator"]), participants[0])
-                tz_string = initiator.get("timezone") or config.DEFAULT_TIMEZONE
-                try:
-                    if tz_string == "UTC":
-                        tz = timezone.utc
-                    else:
-                        tz = zoneinfo.ZoneInfo(tz_string)
-                except zoneinfo.ZoneInfoNotFoundError:
-                    logger.warning(f"Invalid timezone string {tz_string}, falling back to UTC")
-                    tz = timezone.utc
-
-                local_start = slot.utc_start.astimezone(tz)
-                local_end = slot.utc_end.astimezone(tz)
-                
-                date_str = local_start.strftime("%Y-%m-%d")
-                start_str = local_start.strftime("%H:%M")
-                end_str = local_end.strftime("%H:%M")
+                proposed_times_str = _format_proposed_times(slot, participants)
                 
                 from agent.framing import compose_email_body
                 framing_prompt = prompts.BOOKING_CONFIRMATION_FRAMING_PROMPT.format(
                     meeting_title=thread["subject"],
-                    date=date_str,
-                    time=f"{start_str} to {end_str}",
+                    proposed_times=proposed_times_str,
                     duration=f"{slot.duration_minutes}m"
                 )
                 
@@ -115,9 +126,7 @@ def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id
                     core_template=prompts.BOOKING_CONFIRMATION_CORE_TEMPLATE,
                     template_vars={
                         "meeting_title": thread["subject"],
-                        "date": date_str,
-                        "start_time": start_str,
-                        "end_time": end_str
+                        "proposed_times": proposed_times_str
                     }
                 )
 
@@ -222,35 +231,14 @@ def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id
         conn.commit()
 
         # Format proposal email body
-        import zoneinfo
-        from datetime import timezone
         from agent.framing import compose_email_body
         
         participants = dal.get_participants(conn, thread_id)
-        initiator = next((p for p in participants if p["is_initiator"]), participants[0])
-        tz_string = initiator.get("timezone") or config.DEFAULT_TIMEZONE
-        try:
-            if tz_string == "UTC":
-                tz = timezone.utc
-            else:
-                tz = zoneinfo.ZoneInfo(tz_string)
-        except zoneinfo.ZoneInfoNotFoundError:
-            logger.warning(f"Invalid timezone string {tz_string}, falling back to UTC")
-            tz = timezone.utc
-
-        local_start = proposed_slot.utc_start.astimezone(tz)
-        local_end = proposed_slot.utc_end.astimezone(tz)
-
-        date_str = local_start.strftime("%Y-%m-%d")
-        start_str = local_start.strftime("%H:%M")
-        end_str = local_end.strftime("%H:%M")
+        proposed_times_str = _format_proposed_times(proposed_slot, participants)
         
         framing_prompt = prompts.SLOT_PROPOSAL_FRAMING_PROMPT.format(
             subject=thread["subject"],
-            date=date_str,
-            start_time=start_str,
-            end_time=end_str,
-            timezone=str(tz)
+            proposed_times=proposed_times_str
         )
         
         body = compose_email_body(
@@ -258,10 +246,7 @@ def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id
             framing_prompt=framing_prompt,
             core_template=prompts.SLOT_PROPOSAL_CORE_TEMPLATE,
             template_vars={
-                "date": date_str,
-                "start_time": start_str,
-                "end_time": end_str,
-                "timezone": str(tz)
+                "proposed_times": proposed_times_str
             }
         )
 

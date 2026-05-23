@@ -10,7 +10,7 @@ import email
 import logging
 from dataclasses import dataclass
 from email.message import Message
-from email.utils import getaddresses, parseaddr
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ class InboundEmail:
     body_text: str
     in_reply_to: Optional[str]
     references: Optional[str]
+    sender_timezone_offset: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +178,8 @@ def fetch_unseen(conn: imaplib.IMAP4_SSL) -> list[InboundEmail]:
     for uid in uids:
         uid_str = uid.decode("ascii")
         try:
-            # Fetch the full RFC822 payload for this UID
-            # Using UID fetch to ensure we have the persistent UID
-            fetch_typ, fetch_data = conn.uid("FETCH", uid_str, "(RFC822)")
+            # Fetch the full raw payload for this UID using PEEK to prevent auto-marking as Seen
+            fetch_typ, fetch_data = conn.uid("FETCH", uid_str, "(BODY.PEEK[])")
         except imaplib.IMAP4.error as e:
             logger.error(f"IMAP fetch failed for UID {uid_str}: {e}")
             raise
@@ -221,6 +221,17 @@ def fetch_unseen(conn: imaplib.IMAP4_SSL) -> list[InboundEmail]:
 
         body_text = _extract_body(msg)
 
+        # Parse timezone offset from Date header
+        sender_timezone_offset = None
+        date_str = msg.get("Date")
+        if date_str:
+            try:
+                dt = parsedate_to_datetime(date_str)
+                if dt.tzinfo:
+                    sender_timezone_offset = dt.strftime("%z")  # e.g., '+0530'
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse Date header for UID {uid_str}: {e}")
+
         emails.append(InboundEmail(
             uid=uid_str,
             message_id=msg_id,
@@ -231,7 +242,8 @@ def fetch_unseen(conn: imaplib.IMAP4_SSL) -> list[InboundEmail]:
             auto_submitted=auto_submitted,
             body_text=body_text,
             in_reply_to=in_reply_to,
-            references=references
+            references=references,
+            sender_timezone_offset=sender_timezone_offset
         ))
 
     return emails

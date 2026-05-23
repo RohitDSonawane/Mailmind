@@ -29,7 +29,7 @@ def generate_framing(framing_prompt: str) -> str | None:
     try:
         client = Groq(api_key=config.GROQ_API_KEY)
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": framing_prompt}],
             temperature=0.3,
             max_tokens=100

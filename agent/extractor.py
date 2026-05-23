@@ -17,7 +17,7 @@ import config
 # ---------------------------------------------------------------------------
 
 extractor_agent = Agent(
-    model=GroqModel("llama-3.3-70b-versatile"),
+    model=GroqModel("llama-3.1-8b-instant"),
     output_type=ExtractorResult,
     system_prompt=EXTRACTOR_SYSTEM_PROMPT,
     retries=2,

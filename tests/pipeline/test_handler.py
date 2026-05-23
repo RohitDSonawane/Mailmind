@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 from database import dal
 from pipeline import handler
+import config
 from tools.gmail_reader import InboundEmail
 from agent import classifier
 from agent.definitions import ClassificationResult, ExtractorResult, AvailabilityWindow
@@ -33,7 +34,7 @@ def make_email(msg_id, subject, from_addr, to_addrs=None, in_reply=None, refs=No
         message_id=msg_id,
         subject=subject,
         from_address=from_addr,
-        to_addresses=to_addrs or ["bot@example.com"],
+        to_addresses=to_addrs or [config.GMAIL_ADDRESS],
         cc_addresses=[],
         auto_submitted=auto,
         body_text=body,
