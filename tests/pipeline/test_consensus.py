@@ -69,7 +69,11 @@ def test_check_consensus_one_not_submitted_no_action(conn, mock_smtp, mocker):
 
 
 def test_check_consensus_all_confirmed_triggers_provisioning(conn, mock_smtp, mocker):
+    import json
+    slot = {"utc_start": "2025-01-01T10:00:00Z", "utc_end": "2025-01-01T11:00:00Z", "duration_minutes": 60}
+    
     dal.insert_thread(conn, "t1", "Subject", "a@example.com", "2025-01-01T00:00:00Z")
+    dal.set_proposed_slot(conn, "t1", json.dumps(slot), "utc")
     dal.update_thread_status(conn, "t1", "proposal_sent", "2025-01-01T00:00:00Z")
     dal.insert_participant(conn, "t1", "a@example.com", True)
     dal.insert_participant(conn, "t1", "b@example.com", False)
@@ -77,8 +81,63 @@ def test_check_consensus_all_confirmed_triggers_provisioning(conn, mock_smtp, mo
     dal.set_confirmed(conn, "t1", "a@example.com", "2025-01-01T00:00:00Z")
     dal.set_confirmed(conn, "t1", "b@example.com", "2025-01-01T00:00:00Z")
 
-    # In Phase 08 this just hits the TODO stub, so we expect no exceptions and status remains (for now)
+    mock_create = mocker.patch("tools.calendar.create_event", return_value="fake-event-id")
+
     consensus.check_consensus(conn, mock_smtp, "t1", "2025-01-01T01:00:00Z")
+
+    mock_create.assert_called_once()
+    thread = dal.get_thread(conn, "t1")
+    assert thread["calendar_event_id"] == "fake-event-id"
+    assert thread["status"] == "completed"
+    mock_smtp.sendmail.assert_called_once()
+
+def test_check_consensus_idempotency(conn, mock_smtp, mocker):
+    import json
+    slot = {"utc_start": "2025-01-01T10:00:00Z", "utc_end": "2025-01-01T11:00:00Z", "duration_minutes": 60}
+    
+    dal.insert_thread(conn, "t1", "Subject", "a@example.com", "2025-01-01T00:00:00Z")
+    dal.set_proposed_slot(conn, "t1", json.dumps(slot), "utc")
+    dal.update_thread_status(conn, "t1", "proposal_sent", "2025-01-01T00:00:00Z")
+    dal.insert_participant(conn, "t1", "a@example.com", True)
+    dal.insert_participant(conn, "t1", "b@example.com", False)
+
+    dal.set_confirmed(conn, "t1", "a@example.com", "2025-01-01T00:00:00Z")
+    dal.set_confirmed(conn, "t1", "b@example.com", "2025-01-01T00:00:00Z")
+    
+    dal.set_calendar_event_id(conn, "t1", "existing-id", "utc")
+    dal.update_thread_status(conn, "t1", "proposal_sent", "utc")
+    
+    mock_create = mocker.patch("tools.calendar.create_event")
+
+    consensus.check_consensus(conn, mock_smtp, "t1", "2025-01-01T01:00:00Z")
+
+    mock_create.assert_not_called()
+    mock_smtp.sendmail.assert_called_once()
+
+def test_check_consensus_create_event_raises(conn, mock_smtp, mocker):
+    import json
+    slot = {"utc_start": "2025-01-01T10:00:00Z", "utc_end": "2025-01-01T11:00:00Z", "duration_minutes": 60}
+    
+    dal.insert_thread(conn, "t1", "Subject", "a@example.com", "2025-01-01T00:00:00Z")
+    dal.set_proposed_slot(conn, "t1", json.dumps(slot), "utc")
+    dal.update_thread_status(conn, "t1", "proposal_sent", "2025-01-01T00:00:00Z")
+    dal.insert_participant(conn, "t1", "a@example.com", True)
+    dal.insert_participant(conn, "t1", "b@example.com", False)
+
+    dal.set_confirmed(conn, "t1", "a@example.com", "2025-01-01T00:00:00Z")
+    dal.set_confirmed(conn, "t1", "b@example.com", "2025-01-01T00:00:00Z")
+    
+    from googleapiclient.errors import HttpError
+    import httplib2
+    mock_create = mocker.patch("tools.calendar.create_event", side_effect=HttpError(httplib2.Response({"status": 500}), b"Error"))
+
+    consensus.check_consensus(conn, mock_smtp, "t1", "2025-01-01T01:00:00Z")
+
+    mock_create.assert_called_once()
+    mock_smtp.sendmail.assert_not_called()
+    thread = dal.get_thread(conn, "t1")
+    assert thread["calendar_event_id"] is None
+    assert thread["status"] == "proposal_sent"
 
 
 def test_check_consensus_one_not_confirmed_no_action(conn, mock_smtp, mocker):

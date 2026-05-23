@@ -48,7 +48,59 @@ def check_consensus(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, thread_id
     if status == "proposal_sent":
         if dal.all_confirmed(conn, thread_id):
             logger.info(f"Thread {thread_id}: All participants confirmed. Triggering calendar provisioning.")
-            # TODO: Phase 09 - Call calendar adapter to create the event.
+            # Phase 09 - Call calendar adapter to create the event.
+            if thread["calendar_event_id"]:
+                logger.info(f"Thread {thread_id}: Calendar event already exists, skipping creation.")
+            else:
+                try:
+                    slot_json = thread["proposed_slot"]
+                    if not slot_json:
+                        logger.error(f"Thread {thread_id}: Completed but no proposed_slot found.")
+                        return
+
+                    from agent.definitions import MeetingSlot
+                    slot = MeetingSlot.model_validate_json(slot_json)
+
+                    participants = dal.get_participants(conn, thread_id)
+                    participant_emails = [p["email_address"] for p in participants]
+
+                    clean_subject = gmail_sender.strip_subject_prefixes(thread["subject"])
+
+                    from tools import calendar
+                    event_id = calendar.create_event(clean_subject, slot.utc_start, slot.utc_end, participant_emails)
+
+                    dal.set_calendar_event_id(conn, thread_id, event_id, current_utc)
+                    conn.commit()
+                except Exception as e:
+                    logger.error(f"Thread {thread_id}: Failed to provision calendar event: {e}")
+                    return
+
+            try:
+                slot_json = thread["proposed_slot"]
+                from agent.definitions import MeetingSlot
+                slot = MeetingSlot.model_validate_json(slot_json)
+
+                body = prompts.BOOKING_CONFIRMATION_CORE_TEMPLATE.format(
+                    meeting_title=thread["subject"],
+                    date=slot.utc_start.strftime("%Y-%m-%d"),
+                    start_time=slot.utc_start.strftime("%H:%M"),
+                    end_time=slot.utc_end.strftime("%H:%M"),
+                )
+
+                participants = dal.get_participants(conn, thread_id)
+                participant_emails = [p["email_address"] for p in participants]
+
+                gmail_sender.send_email(
+                    conn=smtp_conn,
+                    to_addresses=participant_emails,
+                    subject=thread["subject"],
+                    body=body,
+                    in_reply_to=thread_id,
+                    references=thread_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to send BOOKING_CONFIRMATION email for thread {thread_id}: {e}")
+
             return
         else:
             return  # Still waiting for confirmations
