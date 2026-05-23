@@ -106,9 +106,20 @@ def _handle_new_request(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, email
     conn.commit()
 
     # Send availability requests
-    body = prompts.AVAILABILITY_REQUEST_CORE
+    from agent.framing import compose_email_body
     for p in participants_set:
         try:
+            framing_prompt = prompts.AVAILABILITY_REQUEST_FRAMING_PROMPT.format(
+                subject=subject,
+                initiator_name=initiator,
+                participant_name=p
+            )
+            body = compose_email_body(
+                email_type="availability_request",
+                framing_prompt=framing_prompt,
+                core_template=prompts.AVAILABILITY_REQUEST_CORE,
+                template_vars={}
+            )
             send_email(
                 conn=smtp_conn,
                 to_addresses=[p],
@@ -164,11 +175,22 @@ def _handle_availability(conn: sqlite3.Connection, smtp_conn: smtplib.SMTP, emai
     else:
         # Empty windows, ask for clarification
         try:
+            from agent.framing import compose_email_body
+            framing_prompt = prompts.CLARIFICATION_REQUEST_FRAMING_PROMPT.format(
+                subject=thread["subject"],
+                participant_name=sender
+            )
+            body = compose_email_body(
+                email_type="clarification_request",
+                framing_prompt=framing_prompt,
+                core_template=prompts.CLARIFICATION_REQUEST_CORE,
+                template_vars={}
+            )
             send_email(
                 conn=smtp_conn,
                 to_addresses=[sender],
                 subject=thread["subject"],
-                body=prompts.CLARIFICATION_REQUEST_CORE,
+                body=body,
                 in_reply_to=thread_id,
                 references=thread_id
             )
